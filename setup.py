@@ -16,7 +16,7 @@ setup(
             glob(os.path.join("launch", "*launch.[pxy][yma]*")),
         ),
     ],
-    install_requires=["setuptools"],
+    install_requires=["setuptools", "shapely", "yaml"],
     zip_safe=True,
     maintainer="Charlie Street",
     maintainer_email="me@charliestreet.net",
