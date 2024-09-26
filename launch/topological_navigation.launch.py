@@ -11,7 +11,7 @@ from launch.substitutions import LaunchConfiguration
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument
-import os
+import launch
 
 
 def generate_launch_description():
@@ -33,11 +33,23 @@ def generate_launch_description():
         output="screen",
     )
 
+    viz_node = Node(
+        package="topological_navigation",
+        executable="topological_map_visualiser",
+        name="topological_map_visualiser",
+        parameters=[{"map": map_path}],
+        output="screen",
+        condition=launch.conditions.IfCondition(
+            launch.substitutions.LaunchConfiguration("viz")
+        ),
+    )
+
     # Add all the commands
     ld = LaunchDescription()
     ld.add_action(map_arg)
     ld.add_action(pose_topic_arg)
     ld.add_action(viz_arg)
     ld.add_action(localisation_node)
+    ld.add_action(viz_node)
 
     return ld

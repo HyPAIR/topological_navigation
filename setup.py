@@ -25,7 +25,8 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "topological_localisation = topological_navigation.topological_localisation:main"
+            "topological_localisation = topological_navigation.topological_localisation:main",
+            "topological_map_visualiser = topological_navigation.topological_map_visualiser:main",
         ],
     },
 )
