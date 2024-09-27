@@ -13,6 +13,7 @@ from nav2_msgs.action import NavigateToPose
 from action_msgs.msg import GoalStatus
 from std_msgs.msg import String
 from rclpy.node import Node
+from threading import Lock
 import rclpy
 
 
@@ -26,6 +27,9 @@ class EdgeNavigationServer(Node):
         _top_map: The topological map
         _top_loc_sub: A subscriber to the robot's topological location
         _current_loc: The robot's current topological location
+        _current_nav_handle: The current goal sent to the navigation client
+        _current_dest: The current destination
+        _lock: Lock for testing or writing nav_handle (not wait actions) or current_dest
         _nav_client: An action client for navigation
     """
 
@@ -36,6 +40,9 @@ class EdgeNavigationServer(Node):
 
         self._top_map = TopologicalMap(self.get_parameter("map").value)
         self._current_loc = None
+        self._current_nav_handle = None
+        self._current_dest = None
+        self._lock = Lock()
 
         # This allows us to recreate latching from ROS 1
         latching_qos = QoSProfile(
@@ -65,6 +72,7 @@ class EdgeNavigationServer(Node):
     def destroy(self):
         """Destroy action server."""
         self._action_server.destroy()
+        self._nav_client.destroy()
         super().destroy_node()
 
     def _receive_top_loc(self, msg):
@@ -74,6 +82,17 @@ class EdgeNavigationServer(Node):
             msg: The topological location
         """
         self._current_loc = msg.data
+
+        with self._lock:
+            if self._current_nav_handle is not None:
+                if self._current_loc == self._current_dest:
+                    self.get_logger().info(
+                        "Preempting Navigation: Influence Zone Reached"
+                    )
+                    # I don't mind whether this goes through or not
+                    # If it works, the robot stops early
+                    # If it doesn't, the robot will stop once nav completes naturally
+                    self._nav_client._cancel_goal_async(self._current_nav_handle)
 
     def _create_result(self, loc, success):
         """Create a result message.
@@ -90,6 +109,22 @@ class EdgeNavigationServer(Node):
         result.success = success
         return result
 
+    def _create_nav_goal(self, dest_node):
+        """Create a navigation goal to a given destination node.
+
+        Args:
+            dest_node: The node to navigate to
+
+        Returns:
+            The navigation goal
+        """
+        nav_goal = NavigateToPose.Goal()
+        nav_goal.pose.header.frame_id = "map"
+        point = self._top_map._nodes[dest_node]
+        nav_goal.pose.pose.position.x = point.x
+        nav_goal.pose.pose.position.y = point.y
+        return nav_goal
+
     def _execute_callback(self, goal_handle):
         """Send a navigation goal, and wait until completion or the node is reached.
 
@@ -102,35 +137,39 @@ class EdgeNavigationServer(Node):
         edge = goal_handle.request.edge_id
         self.get_logger().info("Received request to navigate on {}".format(edge))
 
-        # Check edge is valid
+        # Check edge is valid. If not, fail immediately
         if (
             self._current_loc not in self._top_map._nodes
-            or edge not in self._top_map._graph[self._current_loc]
+            or edge not in self._top_map.edges_from_node(self._current_loc)
         ):
             self.get_logger().info("Action failed due to invalid input")
             goal_handle.abort()
             return self._create_result(self._current_loc, False)
 
-        # Create nav goal to destination node
-        nav_goal = NavigateToPose.Goal()
-        nav_goal.pose.header.frame_id = "map"
+        # Get destination node
         dest_node = self._top_map.get_target(self._current_loc, edge)
-        point = self._top_map._nodes[dest_node]
-        nav_goal.pose.pose.position.x = point.x
-        nav_goal.pose.pose.position.y = point.y
+        with self._lock:
+            self._current_dest = dest_node
 
-        # Have to do everything asynchronously
-        future = self._nav_client.send_goal_async(nav_goal)
+        # Send goal and test that it's accepted
+        future = self._nav_client.send_goal_async(self._create_nav_goal(dest_node))
         self.executor.spin_until_future_complete(future)
-        if not future.result().accepted:
+        self._current_nav_handle = future.result()
+        if not self._current_nav_handle.accepted:
             self.get_logger().info("Goal Not Accepted")
             goal_handle.abort()
+            with self._lock:
+                self._current_nav_handle = None
             return self._create_result(self._current_loc, False)
-        result = future.result().get_result_async()
+
+        # Wait for the result, i.e. until navigation is finished
+        result = self._current_nav_handle.get_result_async()
         self.executor.spin_until_future_complete(result)
+        with self._lock:
+            self._current_nav_handle = None
         self.get_logger().info("Navigation Finished")
 
-        # Process result
+        # Process result and return
         if (
             self._current_loc == dest_node
             or result.result().status == GoalStatus.STATUS_SUCCEEDED
