@@ -27,6 +27,7 @@ setup(
         "console_scripts": [
             "topological_localisation = topological_navigation.topological_localisation:main",
             "topological_map_visualiser = topological_navigation.topological_map_visualiser:main",
+            "edge_navigation = topological_navigation.edge_navigation:main",
         ],
     },
 )

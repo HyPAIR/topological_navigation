@@ -44,6 +44,14 @@ def generate_launch_description():
         ),
     )
 
+    nav_node = Node(
+        package="topological_navigation",
+        executable="edge_navigation",
+        name="edge_navigation_server",
+        parameters=[{"map": map_path}],
+        output="screen",
+    )
+
     # Add all the commands
     ld = LaunchDescription()
     ld.add_action(map_arg)
@@ -51,5 +59,6 @@ def generate_launch_description():
     ld.add_action(viz_arg)
     ld.add_action(localisation_node)
     ld.add_action(viz_node)
+    ld.add_action(nav_node)
 
     return ld
