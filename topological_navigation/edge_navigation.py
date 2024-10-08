@@ -5,6 +5,7 @@ Author: Charlie Street
 Owner: Charlie Street
 """
 
+import rclpy.wait_for_message
 from topological_navigation.topological_map import TopologicalMap
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy
 from rclpy.action import ActionServer, ActionClient
@@ -59,6 +60,11 @@ class EdgeNavigationServer(Node):
 
         self._nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
         self._nav_client.wait_for_server()
+
+        while self._current_loc is None:
+            self.get_logger().info("Waiting for Topological Location...")
+            rclpy.spin_once(self)
+        self.get_logger().info("Topological Location Received")
 
         self._action_server = ActionServer(
             self,
