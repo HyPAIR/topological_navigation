@@ -11,11 +11,13 @@ from rclpy.qos import QoSProfile, QoSDurabilityPolicy
 from rclpy.action import ActionServer, ActionClient
 from topological_msgs.action import NavigateEdge
 from nav2_msgs.action import NavigateToPose
+from lifecycle_msgs.srv import GetState
 from action_msgs.msg import GoalStatus
 from std_msgs.msg import String
 from rclpy.node import Node
 from threading import Lock
 import rclpy
+import time
 
 
 class EdgeNavigationServer(Node):
@@ -61,10 +63,8 @@ class EdgeNavigationServer(Node):
         self._nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
         self._nav_client.wait_for_server()
 
-        while self._current_loc is None:
-            self.get_logger().info("Waiting for Topological Location...")
-            rclpy.spin_once(self)
-        self.get_logger().info("Topological Location Received")
+        # I hate this so much
+        self._wait_for_nav2_and_location()
 
         self._action_server = ActionServer(
             self,
@@ -80,6 +80,47 @@ class EdgeNavigationServer(Node):
         self._action_server.destroy()
         self._nav_client.destroy()
         super().destroy_node()
+
+    def _wait_for_nav2_and_location(self):
+        """Wait for nav2 to finish and a topological location to be received."""
+        while self._current_loc is None:
+            self.get_logger().info("Waiting for Topological Location...")
+            rclpy.spin_once(self)
+        self.get_logger().info("Topological Location Received")
+
+        self.get_logger().info("Waiting for BT Navigator and AMCL to Setup")
+        self._wait_for_node_to_activate("amcl")
+        self._wait_for_node_to_activate("bt_navigator")
+        self.get_logger().info("BT Navigator and AMCL Ready")
+
+    def _wait_for_node_to_activate(self, node_name):
+        """Wait for a particular nav2 node to become active.
+
+        This is horrible but necessary, as the NavigateToPose server will say it
+        is ready when its not. I need to wait for other nav2 nodes to be active first.
+
+        This function is taken from:
+        https://robotics.snowcron.com/robotics_ros2/waypoint_follower_scripts.htm
+
+        Args:
+            node_name: The node to wait for
+        """
+        self.get_logger().debug("Waiting for {} to become active.".format(node_name))
+        node_service = node_name + "/get_state"
+        state_client = self.create_client(GetState, node_service)
+        while not state_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info("{} unavailable, waiting.".format(node_service))
+
+        req = GetState.Request()
+        state = "unknown"
+        while state != "active":
+            self.get_logger().debug("Getting {} state...".format(node_name))
+            future = state_client.call_async(req)
+            rclpy.spin_until_future_complete(self, future)
+            if future.result() is not None:
+                state = future.result().current_state.label
+                self.get_logger().debug("Result of get_state: {}".format(state))
+            time.sleep(2)
 
     def _receive_top_loc(self, msg):
         """Update the topological location and cancel any goals if dest reached.
